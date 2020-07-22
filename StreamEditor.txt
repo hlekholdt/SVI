@@ -1,0 +1,294 @@
+//----------------------------------------------------------------------------------------------------------------
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#define MAX_ARRAY 256
+
+typedef char * charPointer;
+typedef char charArray[MAX_ARRAY];
+
+typedef enum {
+  noType,
+  textType,
+  numType,
+  error
+} CommandType; //all types of commands
+
+typedef struct {
+  int start;
+  int end;
+} LineRange; //used from Range union
+
+
+typedef union {
+  int none; //1 if editCommand has noType 
+  charArray text; //the text textType looks for
+  LineRange lines; //the start & end number of numType
+} Range;
+
+typedef struct{
+  CommandType commandType;
+  Range range;
+  char editOperator;
+  charArray editData;
+} editCommand; //main editCommand structure
+
+typedef editCommand editCommandArray[MAX_ARRAY];
+
+//-------------------------------------------------------------------------------------------------------------
+
+void storeFileCommands(FILE *commandEditFile, editCommandArray commands, int *editNumbers);
+int inRange(charArray input, editCommand edit, int *lineNumber); 
+void replaceString(charPointer done, charPointer string, charPointer original, charPointer replacement);
+void editLine(charArray startingInput, charArray input, editCommand edit, int *deleted, int *alreadyDone);
+
+//-------------------------------------------------------------------------------------------------------------
+
+int main(int argc, charPointer argV[]){
+  
+  FILE *commandEditFile;
+  editCommandArray commands;
+  charArray input, original;
+  int i, editNum, lineNum,  deleted, editO;
+  charPointer final[MAX_ARRAY];
+  charPointer token;
+
+  printf("---------------------------------------------------------------------------\n");
+
+  //read in the file from the argument
+  if ((commandEditFile = fopen(argV[1],"r")) == NULL){
+    perror("Opening the argument file");
+    exit(EXIT_FAILURE);
+  }
+
+  storeFileCommands(commandEditFile, commands, &editNum); //function to store command from file into array
+
+  lineNum = 1; //counter of the lines inputted from user
+
+  printf("Write the input to be edited. Press enter to stop.\n\n"); 
+
+  //read a line from standard input
+  while(fgets(input,MAX_ARRAY,stdin) != NULL && strcmp(input,"\n")){
+    input[strlen(input)-1] = '\0'; //replace \n with termination character
+    strcpy(original, input); //save the original input before edited
+    editO = 0; //counter of the # of inputted lines that were deleted during the edit
+    deleted = 0; //set deleted to false
+
+    for(i = 0; i < editNum; i++){
+      if(inRange(input,commands[i],&lineNum)){ //function to check if the input is in range of each command
+	editLine(original,input,commands[i],&deleted, &editO); //do the edit
+      }      
+    }
+    final[lineNum-1] = (charPointer)malloc(sizeof(char)*MAX_ARRAY);
+    strcpy(final[lineNum-1],input); //add final edited input to the final array
+    lineNum++;
+  }
+
+  printf("---------------------------------------------------------------------------\n");
+  printf("This is the edited output:\n\n");
+
+  int j;
+  //print out the edited input
+  for(j = 0; j < lineNum-1; j++){
+    token = strtok(final[j], "\n");
+    
+    while( token != NULL){
+      printf("%s\n",token);
+      token = strtok(NULL, "\n");
+    }
+  }
+
+  printf("---------------------------------------------------------------------------\n");
+
+  return(EXIT_SUCCESS);
+}
+
+//--------------------------------------------------------------------------------------------------------------
+
+void storeFileCommands(FILE *commandEditFile, editCommandArray commands, int *editNumbers){
+
+  int i = 0;
+  char C1;
+  charArray line;
+  
+
+  while ( (C1 = fgetc(commandEditFile)) != EOF ){
+
+    strcpy(line,""); //create an empty line for the new edit command
+
+    while( C1 != '\n'){ //setting each line separated by new line characters
+      strncat(line,&C1,1);
+      C1 = fgetc(commandEditFile);
+    }
+    strncat(line,&C1,1); //add the new line character to the end
+    line[strlen(line)-1] = '\0'; //replace \n with \0
+
+    //if the line starts with a slash
+    if ( line[0] == 'I' ||line[0] == 'O' || line[0] == 'A' || line[0] == 's' || line[0] == 'd' ){
+      commands[i].commandType = noType;
+      commands[i].range.none = 1;
+      commands[i].editOperator = line[0];
+      strncpy(commands[i].editData, line+1, strlen(line)-1);
+    }
+
+    //else if the line starts with a letter
+    else if ( line[0] == '/' ){
+      commands[i].commandType = textType;
+      charPointer secSlash = strchr(line+1,'/');
+      strncpy(commands[i].range.text, line+1, strlen(line)-strlen(secSlash)-1);
+      strncpy(line,secSlash+1,strlen(secSlash+1)+1);
+      commands[i].editOperator = line[0];
+      strncpy(commands[i].editData, line+1 , strlen(line)-1);
+    }
+
+    //else if the line starts with a number
+    else if ( isdigit(line[0]) ){
+      commands[i].commandType = numType;
+      charPointer separators = ",/"; 
+      charArray temp;
+      charPointer token;
+      strncpy(temp, line, strlen(line)); //temp = line
+      token = strtok(temp, separators); //anything before , 
+      commands[i].range.lines.start = atoi(token);
+      token = strtok(NULL, separators); //anything after , 
+      commands[i].range.lines.end = atoi(token);      
+      charPointer firstSlash = strchr(line,'/'); 
+      strncpy(line, firstSlash+1, strlen(firstSlash)+1);
+      commands[i].editOperator = line[0];
+      strncpy(commands[i].editData, line+1 , strlen(line)-1);
+    }
+
+    //none of the correct formats --> error
+    else{
+      commands[i].commandType = error;
+    }
+    i++;
+  }
+  *editNumbers = i;
+}
+
+int inRange(charArray input, editCommand edit, int *lineNumber){
+
+  //if the edit starts with a slash
+  if(edit.commandType == textType){
+    if(strstr(input, edit.range.text) != NULL){
+      return 1; //in range
+    }
+    else{
+      return 0; //not in range
+    }
+  } 
+
+  //if the edit starts with a number line range
+  else if(edit.commandType == numType){
+
+    if( (*lineNumber) >= (edit.range.lines.start) && (*lineNumber) <= (edit.range.lines.end)){
+      return 1; //in range
+    }
+    else{
+      return 0; //not in range
+    }
+  }
+
+  else{
+    return 1; //in range because the range type is either none or error
+  }
+}
+
+void replaceString(charArray done, charPointer string, charPointer original, charPointer replacement){
+  charArray temp;
+  charPointer C1;
+
+  if(!(C1 = strstr(string, original))){
+    strcpy(done, string); //if found wasn't found in input, just return the input
+  }
+
+  else{ //if found was found, then replace original with replacement
+    strncpy(temp, string, C1-string); 
+    temp[C1-string] = '\0';
+    sprintf(temp + (C1-string), "%s%s", replacement, C1+strlen(original)); //sprintf stores output in a char buffer (temp)
+    strcpy(done, temp);
+  }
+}
+
+
+void editLine(charArray startingInput, charArray input, editCommand edit, int *deleted, int *alreadyDone){
+
+  if ( edit.editOperator == 'A' ){
+    if (*deleted == 0){ //don't do edit if the line has already been deleted
+      strcpy(input,strcat(input, edit.editData));
+      strcpy(startingInput, input);
+    }
+  }
+
+
+  if ( edit.editOperator == 'O' ){
+    if(*deleted == 0){ //don't do edit if the line has already been deleted
+      if(*alreadyDone == 0){ //if O hasn't been done on this line
+	strcpy(input,strcat(strcat(edit.editData,"\n"), input));
+	*alreadyDone = 1;
+      }
+      else{ //if O has already been done on this line
+	charArray edits = "\0";
+	strncpy(edits, input, strlen(input) - strlen(startingInput)); //edit has input without the starting input                            
+	strcat(edits, strcat(edit.editData,"\n")); //add the editData to edit
+	strcat(edits, startingInput); //add the saved starting input
+	strcpy(input, edits);
+      }
+    }
+  }
+
+
+  if ( edit.editOperator == 'I' ){
+    if (*deleted == 0){ //only do this edit if the line hasn't been deleted
+      if(*alreadyDone == 0){ //if O edit has't been done on this line
+	strcpy(input, strcat(edit.editData, input));
+	strcpy(startingInput, input);
+      }
+      else{ //if O edit has been done already --> add editData above the last line
+	charPointer addHere;
+	charArray lastLine;
+	addHere = strrchr(input,'\n') + 1; //char pointer to the first letter of the last line of input
+	strncpy(lastLine, addHere, strlen(input) - strlen(addHere)); //save last line to a charArray
+	input[strlen(input) - strlen(addHere)] = '\0'; //end input at the charPointer
+	strcat(input, edit.editData); //add the editData string
+	strcat(input, lastLine);
+      }
+    }
+  }
+
+
+  if ( edit.editOperator == 's' ) {
+    charArray found = "";
+    charArray replacement = "";
+    charPointer token;
+    charArray answer = "";
+    
+    token = strtok(edit.editData,"/"); //break into the found and replacements strings
+    strcpy(found, token); // found = first token
+    token = strtok(NULL,"/");
+    strcpy(replacement, token); //replacement = second token
+    replacement[strlen(replacement)] = '\0';
+    found[strlen(found)] = '\0';
+
+    while(strstr(input, found)){ //first token is in the input
+      replaceString(answer, input, found, replacement); //call switchStrings function to switch found & replacement 
+      strcpy(input, answer);
+    }
+  }
+
+
+  if ( edit.editOperator == 'd' ){
+    if(*alreadyDone == 0){ //if O edit hasn't been implemented already
+      input[0] = '\0'; //the input is all one line so simple delete
+    }
+    else{ //if O edit has already been implemented
+      charPointer delete;
+      delete = strrchr(input,'\n'); //last new line character of input
+      input[strlen(input) - strlen(delete)] = '\0'; //stop input at that delete charPointer
+    }
+    *deleted = 1; //boolean if line has been deleted is true
+  }
+}
